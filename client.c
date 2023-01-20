@@ -19,8 +19,10 @@
 #include <time.h>
 #include <math.h>
 #include <assert.h>
+#include <signal.h>
 #define MAXLINE 1000
 #define CLOSEFLAG "exit\n"
+#define MEASURE "MEASUREMENTS\n"
 
 typedef struct
 {
@@ -32,15 +34,76 @@ typedef struct
 	int sizeof_packages;
 }Conf;
 
-void data()
+
+typedef struct 
 {
-	
+	unsigned int number_of_data;
+	char **container;
+}Data;
+
+void read_data(Data *d)
+{
+	d->number_of_data=0;
+	char line[255];
+	FILE *fp=fopen("data.in","r");
+	if(fp==NULL)
+	{
+		perror("File data.in did not open properly");
+		return;
+	}
+	while(fgets(line,255,fp)!=NULL)
+	{
+		d->number_of_data++;
+	}
+	fclose(fp);
+	if(d->number_of_data==0 || d->number_of_data==1)
+	{
+		return;
+	}
+
+	d->container=(char **)malloc(sizeof(char *)*(d->number_of_data+1));
+	for(int i=0;i<d->number_of_data;i++)
+	{
+		d->container[i]=(char *)malloc(sizeof(char)*255);
+	}
+
+	fp=fopen("data.in","r");
+	if(fp==NULL)
+	{
+		perror("File data.in did not open properly");
+		return;
+	}
+	int c=0;
+	while(fgets(line,255,fp)!=NULL)
+	{
+		strcpy(d->container[c++],line);
+	}
+	fclose(fp);
+
+}
+
+char* ip_address()
+{
+	int n;
+    struct ifreq ifr;
+    char array[] = "eth0";
+    n = socket(AF_INET, SOCK_DGRAM, 0);
+    //Type of address to retrieve - IPv4 IP address
+    ifr.ifr_addr.sa_family = AF_INET;
+    //Copy the interface name in the ifreq structure
+    strncpy(ifr.ifr_name , array , IFNAMSIZ - 1);
+    ioctl(n, SIOCGIFADDR, &ifr);
+    close(n);
+	return inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr);
 }
 
 Conf configure(int argc,char **argv)
 {
 	int argcounter=1;
 	Conf conf; 
+	conf.port=0;
+	conf.experiment_interval=0;
+	conf.experiment_duration=0;
 	while(argcounter<argc)
 	{
 		if(strcmp(argv[argcounter],"--s")==0)
@@ -82,20 +145,29 @@ Conf configure(int argc,char **argv)
 	return conf;
 }
 
-char* ip_address()
+void free_data(Data *d)
 {
-	int n;
-    struct ifreq ifr;
-    char array[] = "eth0";
-    n = socket(AF_INET, SOCK_DGRAM, 0);
-    //Type of address to retrieve - IPv4 IP address
+	for(int i=0;i<d->number_of_data;i++)
+	{
+		free(d->container[i]);
+	}
+	free(d->container);
+}
 
-    ifr.ifr_addr.sa_family = AF_INET;
-    //Copy the interface name in the ifreq structure
-    strncpy(ifr.ifr_name , array , IFNAMSIZ - 1);
-    ioctl(n, SIOCGIFADDR, &ifr);
-    close(n);
-	return inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr);
+void print_conf(Conf *c)
+{
+	// char server_ip[255];
+	// char dedicated[255];
+	// int port;
+	// unsigned int experiment_interval;
+	// unsigned int experiment_duration;
+	// int sizeof_packages;
+	printf("**** Confingurations *****\n");
+	printf("Ip adrress:%s\n",c->server_ip);
+	printf("Dedicated:%s\n",c->dedicated);
+	printf("Port:%d\n",c->port);
+	printf("Experiment duration:%d\n",c->experiment_duration);
+	printf("Experiment interval:%d\n",c->experiment_interval);
 }
 
 
@@ -104,11 +176,13 @@ void client(Conf conf)
 	char recvline[MAXLINE - 1];
 	int sockfd, n,clientfd;
 	char message[255];
-	unsigned int count_packages=0;
-	unsigned int data_len=0;
-	double jitter=0;
-	double owd=0;
 	struct sockaddr_in servaddr;
+	
+	// Random data
+	srand(time(NULL));
+	Data d;
+	read_data(&d);
+
 	
 	if ( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0 )
 		printf("Socket error");
@@ -123,58 +197,40 @@ void client(Conf conf)
 		printf("Connection error:%s, TCP PORT:%u",conf.server_ip,conf.port);
 
 
-	clock_t start_experiment_timer=clock();
-	double time_since_start;
+	unsigned int start_experiment_timer=time(NULL);
+	unsigned int time_since_start;
 
 	while(1) {
-		printf("->");
-		fgets(message,255,stdin);
-		clock_t start_read_timer=clock();
+		strcpy(message,d.container[rand()%d.number_of_data]);
 		send(sockfd, message, strlen(message), 0);
 		if((n = read(sockfd, recvline, 1024))<=0) 
 			break;
 		recvline[n] = '\0';
-		clock_t end_package_read_timer=clock();
 
-		printf("$User request:%s",message);
-		printf("$Server response:%s\n\n",recvline);
+		// Info in client
+		printf("->%s",message);
+		printf("$%s\n\n",recvline);
 
-		// data_len+=strlen(message);
-		// elapsed=(double)(end_package_read_timer-start_read_timer)*1000/CLOCKS_PER_SEC;
-		// if(count_packages>0)
-		// {
-		// 	elapsed_previous=(double)(end_package_read_timer-previous_timer)*1000/CLOCKS_PER_SEC;
-		// 	jitter+=elapsed_previous-elapsed;
-		// }
-		// previous_timer=end_package_read_timer;
-		// owd+=elapsed;
-		// count_packages++;
-
-		if(strcmp(message,CLOSEFLAG)==0)
-		{
-			break;
-		}
-
-		time_since_start=(double)(clock()-start_experiment_timer)*1000/CLOCKS_PER_SEC;
+		time_since_start=time(NULL)-start_experiment_timer;
 		if(time_since_start>conf.experiment_duration)
 		{
 			send(sockfd, CLOSEFLAG, strlen(CLOSEFLAG), 0);
 			break;
 		}
 
+		else if(time_since_start%conf.experiment_interval==0)
+		{
+			send(sockfd,MEASURE,strlen(MEASURE),0);
+		}
+
+		// if(strcmp(message,CLOSEFLAG)==0)
+		// {
+		// 	break;
+		// }
+
 	}
 	close(clientfd);
-	
-	// double throughput=data_len*1e-3/(end_timer-start_timer);
-	// jitter/=count_packages;
-	// jitter*=1e-3;
-
-	// owd/=count_packages;
-	// owd*=1e-3;
-
-	// printf("Throughput:%lf Kbps\n",throughput);
-	// printf("Mean jitter:%lf ms\n",jitter);
-	// printf("One way delay:%lf ms\n",owd);
+	free_data(&d);
 }
 
 void server(Conf conf)
@@ -187,7 +243,6 @@ void server(Conf conf)
 	char server_message[255]="Message response from server";
 	unsigned int count_packages=0;
 	double data_len=0.0,jitter=0.0,owd=0.0;
-	clock_t previous_timer;
 
 	if ((server_fd= socket(AF_INET, SOCK_STREAM, 0))<0)
 	printf("Socket error");
@@ -226,7 +281,9 @@ void server(Conf conf)
 	printf("[   ID] Interval\tThroughput\tJitter\tOne Way delay\n");
 	unsigned int start_package_read_timer,end_package_read_timer,elapsed,elapsed_previous;
 	unsigned int start_timer=time(NULL);
+	unsigned int end_timer=start_timer;
 	unsigned int previous_elapsed_time=0;
+	unsigned int previous_time=0;
 	while(1)
 	{	
 		start_package_read_timer=time(NULL);
@@ -241,10 +298,10 @@ void server(Conf conf)
 		elapsed=time(NULL)-start_timer;
 		if(count_packages>0)
 		{
-			elapsed_previous=end_package_read_timer-previous_timer;
+			elapsed_previous=end_package_read_timer-previous_elapsed_time;
 			jitter+=elapsed_previous-elapsed;
 		}
-		previous_timer=end_package_read_timer;
+		previous_elapsed_time=end_package_read_timer;
 		owd+=elapsed;
 		count_packages++;
 		
@@ -253,15 +310,11 @@ void server(Conf conf)
 			break;
 		}
 
-		if((time(NULL)-start_timer)>conf.experiment_duration)
+		if(strcmp(buffer,MEASURE)==0)
 		{
-			break;
-		}
-
-		if((time(NULL)-start_timer)%conf.experiment_interval==0)
-		{
-			printf("[ INFO] %u - %u\t%.3lfKbps \t%.3lfms \t%.3lfms \n",previous_elapsed_time,previous_elapsed_time+conf.experiment_interval,(data_len*1e-3)/(end_package_read_timer-start_package_read_timer),jitter*1e-3/count_packages,owd*1e-3/count_packages);
-			previous_elapsed_time=time(NULL)-start_timer;
+			previous_time=end_timer-start_timer;
+			end_timer=time(NULL);
+			printf("[ INFO] %u - %u\t%.3lfKbps \t%.3lfms \t%.3lfms \n",previous_time,end_timer-start_timer,(data_len*1e-3)/(end_package_read_timer-start_package_read_timer),jitter*1e-3/count_packages,owd*1e-3/count_packages);
 		}
 	}
 	close(new_socket);
@@ -271,6 +324,7 @@ void server(Conf conf)
 
 int main(int argc, char **argv) {
 	Conf conf=configure(argc,argv);
+	print_conf(&conf);
 
 	if(strcmp(conf.dedicated,"client")==0)
 	{
